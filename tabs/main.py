@@ -6,34 +6,25 @@ import os
 from openpyxl.utils import get_column_letter
 from openpyxl import Workbook
 
-# Predefined template headers
-template_headers = [
-    "Prefix",
-    "REF CODE",
-    "BANK/PLACEMENT",
-    "Ch code",
-    "AGENT",
-    "TAGGING AGENT",
-    "Final Agent",
-    "Final SS",
-    "STATUS",
-    "NEGO BUDDY",
-    "Final SSS",
-    "NAME",
-    "ACCOUNTNUMBER",
-    "DATE",
-    "AMOUNT",
-    "CURRENCY",
-    "FINAL AMOUNT",
-    "Customer Block Code",
-    "UNIT CODE",
-    "PLACEMENT",
-    "FINAL PLACEMENT",
-    "CF RATE",
-    "CF AMOUNT",
-    "TYPE OF PAYMENT",
-    "PAYMENT SOURCE"
-]
+def load_template_headers():
+    try:
+        # Load the template headers from the "Template Header" column of the external Excel file
+        mappings_df = pd.read_excel('header_mappings.xlsx')
+        if 'Template Header' not in mappings_df.columns:
+            st.error("The header_mappings.xlsx file must contain 'Template Header' column.")
+            return None
+        
+        template_headers = mappings_df['Template Header'].dropna().unique().tolist()
+        template_headers = [header.strip().upper() for header in template_headers]
+        return template_headers
+    except Exception as e:
+        st.error(f"Error loading template headers: {e}")
+        return None
+
+# Load template headers from the Excel file
+template_headers = load_template_headers()
+if template_headers is None:
+    st.stop()
 
 def load_header_mappings():
     try:
@@ -47,11 +38,11 @@ def load_header_mappings():
         
         header_mappings = {}
         for _, row in mappings_df.iterrows():
-            template_header = row['Template Header'].strip().upper()
-            possible_header = row['Possible Headers'].strip().upper()
+            template_header = str(row['Template Header']).strip().upper() if not pd.isna(row['Template Header']) else ''
+            possible_headers = str(row['Possible Headers']).strip().upper().split(', ') if not pd.isna(row['Possible Headers']) else []
             if template_header not in header_mappings:
                 header_mappings[template_header] = []
-            header_mappings[template_header].append(possible_header)
+            header_mappings[template_header].extend(possible_headers)
         return header_mappings
     
     except Exception as e:
@@ -73,33 +64,36 @@ def map_headers(df, header_mappings):
                 mapped_header = uploaded_headers_upper[possible_header]
                 break
         mapping[template_header] = mapped_header
+   
     return mapping
 
-def add_ch_code_prefix(df):
-    # for index, row in df.iterrows():
-    #     if row['Ch code'] is not None:
-    #         #row['Prefix'] = str(row['Ch code'])[:6]  # Extract first 6 characters as prefix
-    #         df.loc[index, ["Prefix"]] == 
-    #         print(str(row['Ch code'])[:6])
-    # return df
-
-    # df["Prefix"] = df["Ch code"].apply(lambda x: x[:6])
-    # return df.copy()
-
+# def add_ch_code_prefix(df):
+#     ch_code_col = None
+#     for col in df.columns:
+#         if col.strip().upper() == 'CH CODE':
+#             ch_code_col = col
+#             break
     
-    # if 'CH CODE' in df.columns:
-    #     # Extract first 6 digits from 'CH CODE' column and store in 'Prefix'
-    #     df['Prefix'] = df['CH CODE'].astype(str).str.extract(r'^(\d{6})')
-    # else:
-    #     # If 'CH CODE' column doesn't exist, create an empty 'Prefix' column
-    #     df['Prefix'] = ''
+#     if ch_code_col is None:
+#         print("CH CODE column not found in the uploaded file.")
+#         return df
 
-    # # Reorder columns to ensure 'Prefix' is the first column
-    # if 'Prefix' in df.columns:
-    #     cols = ['Prefix'] + [col for col in df.columns if col != 'Prefix']
-    #     df = df[cols]
+#     # Ensure 'PREFIX' column exists
+#     if 'PREFIX' not in df.columns:
+#         df['PREFIX'] = None
 
-    # return df
+#     for index, row in df.iterrows():
+#         ch_code = row[ch_code_col]
+#         if pd.notnull(ch_code) and isinstance(ch_code, str):
+#             # Remove hyphens and take the first 6 characters
+#             cleaned_code = ch_code.replace('-', '')
+#             prefix = cleaned_code[:6]  # Extract first 6 characters as prefix
+#             df.at[index, 'PREFIX'] = prefix  # Update the 'Prefix' column in the DataFrame
+#         else:
+#             df.at[index, 'PREFIX'] = None  # Handle NaN or NaT values
+
+#     return df
+
 
 def process_each_sheet(uploaded_file):
     try:
@@ -149,7 +143,7 @@ def main():
 
             # Convert all column names to strings to avoid mixed-type warnings
             for df in dfs:
-                df.columns = df.columns.copy()
+                df.columns = df.columns.map(str)
                 
             st.write("Uploaded file preview:")
             st.dataframe(dfs[0].head())
@@ -164,7 +158,7 @@ def main():
 
             for df in dfs:
                 # Step 3: Add CH CODE Prefix to First Column if CH CODE exists
-              
+                # df = add_ch_code_prefix(df)
 
                 # Step 5: Map the headers
                 mapping = map_headers(df, header_mappings)
@@ -175,7 +169,6 @@ def main():
                     st.write(f"Skipping sheet as it does not contain at least two template headers.")
                     continue
                 
-                # st.write(f"Header Mapping for sheet:")
                 st.write("Header Mapping:", mapping)
 
                 # Step 6: Extract values based on mapped headers
@@ -188,7 +181,7 @@ def main():
 
                 mapped_df = pd.DataFrame(extracted_data)
                 final_df = pd.concat([final_df, mapped_df], ignore_index=True)
-            final_df = add_ch_code_prefix(final_df)
+
             st.write("OUTPUT PREVIEW:")
             st.dataframe(final_df.head())
 
@@ -229,5 +222,6 @@ def main():
             file_name=new_file_name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
 if __name__ == "__main__":
     main()
