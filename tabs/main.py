@@ -1,6 +1,10 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+import datetime
+import os
+from openpyxl.utils import get_column_letter
+from openpyxl import Workbook
 
 # Predefined template headers
 template_headers = [
@@ -29,7 +33,6 @@ template_headers = [
     "TYPE OF PAYMENT",
     "PAYMENT SOURCE"
 ]
-
 
 def load_header_mappings():
     try:
@@ -71,55 +74,72 @@ def map_headers(df, header_mappings):
         mapping[template_header] = mapped_header
     return mapping
 
-def main():
-    st.title("Excel and CSV Header Mapping and Value Extraction")
+def add_ch_code_prefix(df):
+    if 'Ch code' in df.columns:
+        df['Prefix'] = df['Ch code'].astype(str).str[:6]
+        df.insert(0, 'Prefix', df.pop('Prefix'))
+    return df
 
+def main():
     # Step 1: Upload the file
     uploaded_file = st.file_uploader("Upload an Excel or CSV file", type=["xlsx", "csv"])
 
     if uploaded_file is not None:
+        # Extract the original file name without extension
+        original_file_name = os.path.splitext(uploaded_file.name)[0]
+
         # Step 2: Read the uploaded file
-        with st.spinner("Processing..."):
+        with st.status("Merging excels...", expanded=True) as status:
             try:
                 if uploaded_file.name.endswith('.xlsx'):
                     df = pd.read_excel(uploaded_file)
                 elif uploaded_file.name.endswith('.csv'):
                     df = pd.read_csv(uploaded_file, encoding='utf-8')
             except UnicodeDecodeError:
-                st.warning("Failed to read the CSV file with 'utf-8' encoding. Trying 'latin1' encoding.")
+                status.update(label=f"Failed to read the CSV file with 'utf-8' encoding. Trying 'latin1' encoding. {uploaded_file.name}", state="error", expanded=True)
                 try:
                     df = pd.read_csv(uploaded_file, encoding='latin1')
                 except UnicodeDecodeError:
-                    st.warning("Failed to read the CSV file with 'latin1' encoding. Trying 'iso-8859-1' encoding.")
-                    df = pd.read_csv(uploaded_file, encoding='iso-8859-1')
-
+                    try: 
+                        status.update(label=f"Failed to read the CSV file with 'latin1' encoding. Trying 'iso-8859-1' encoding. {uploaded_file.name}", state="error", expanded=True)
+                        df = pd.read_csv(uploaded_file, encoding='iso-8859-1')
+                    except UnicodeDecodeError:    
+                        status.update(label=f"Failed to read the CSV file iso-8859-1 {uploaded_file.name}", state="error", expanded=False)
+                        st.stop
+                   
+            # Convert all column names to strings to avoid mixed-type warnings
+            df.columns = df.columns.astype(str)
+            
             st.write("Uploaded file preview:")
             st.dataframe(df.head())
 
-            # Step 3: Load header mappings from the database file
+            # Step 3: Add CH CODE Prefix to First Column if CH CODE exists
+            df = add_ch_code_prefix(df)
+
+            # Step 4: Load header mappings from the database file
             header_mappings = load_header_mappings()
             if header_mappings is None:
                 return
 
-            # Step 4: Map the headers
+            # Step 5: Map the headers
             st.write("Map the headers:")
             mapping = map_headers(df, header_mappings)
             st.write("Header Mapping:", mapping)
 
-            # Step 5: Extract values based on mapped headers
+            # Step 6: Extract values based on mapped headers
             extracted_data = {}
             for template_header, original_header in mapping.items():
                 if original_header is not None:
                     # Convert all values to strings
-                    extracted_data[template_header] = df[original_header].astype(str)
+                    extracted_data[template_header] = df[original_header].copy()
                 else:
-                    extracted_data[template_header] = [""] * len(df)
+                    extracted_data[template_header] = ''
 
             mapped_df = pd.DataFrame(extracted_data)
             # st.write("Mapped DataFrame preview:")
             # st.dataframe(mapped_df.head())
 
-            # Step 6: Load the template Excel file and write the extracted values into it
+            # Step 7: Load the template Excel file and write the extracted values into it
             template_df = pd.read_excel('template.xlsx')
             # st.write("Template DataFrame preview before mapping:")
             # st.dataframe(template_df.head())
@@ -135,16 +155,40 @@ def main():
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 template_df.to_excel(writer, index=False, sheet_name='Sheet1')
+
+                # Auto-fit column widths
+                worksheet = writer.sheets['Sheet1']
+                for col in worksheet.columns:
+                    max_length = 0
+                    column_letter = col[0].column_letter  # Get the column letter
+                    for cell in col:
+                        try:  # Necessary to avoid error on empty cells
+                            if isinstance(cell.value, (int, float)):
+                                cell_value_str = f"{cell.value:.0f}"  # Format as integer without decimal places
+                            else:
+                                cell_value_str = str(cell.value)
+                            
+                            if len(cell_value_str) > max_length:
+                                max_length = len(cell_value_str)
+                        except:
+                            pass
+                    adjusted_width = (max_length + 2) * 1.2
+                    worksheet.column_dimensions[column_letter].width = adjusted_width
+            
             output.seek(0)
 
-            # Step 7: Provide download link for the templated Excel file
-            st.download_button(
-                label="Download Mapped Excel",
-                data=output,
-                file_name="mapped_excel.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            st.success("Processing completed!")
+            # Step 8: Provide download link for the templated Excel file
+            current_date = datetime.datetime.now().strftime("%Y%m%d")
+            new_file_name = f"{current_date}-{original_file_name}.xlsx"
 
+            
+            status.update(label="Process Complete!", state="complete", expanded=False)
+
+        st.download_button(
+            label="Download Mapped Excel",
+            data=output,
+            file_name=new_file_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 if __name__ == "__main__":
     main()
