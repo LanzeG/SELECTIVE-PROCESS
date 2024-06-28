@@ -39,6 +39,8 @@ def run():
         # Filter out empty values and create a DataFrame for new mappings
         new_mappings = [(k, v) for k, v in header_mappings.items() if v]
         new_mappings_df = pd.DataFrame(new_mappings, columns=["Template Header", "Possible Headers"])
+        st.write("NEW DATASET")
+        st.dataframe(header_mappings.items())
         
         # Append the new mappings to the existing DataFrame
         updated_df = pd.concat([existing_df, new_mappings_df], ignore_index=True)

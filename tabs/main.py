@@ -8,6 +8,7 @@ from openpyxl import Workbook
 
 # Predefined template headers
 template_headers = [
+    "Prefix",
     "REF CODE",
     "BANK/PLACEMENT",
     "Ch code",
@@ -62,7 +63,7 @@ def map_headers(df, header_mappings):
         return {}
     
     mapping = {}
-    uploaded_headers_upper = {header.upper(): header for header in df.columns}
+    uploaded_headers_upper = {header.upper().strip(): header for header in df.columns}
     for template_header in template_headers:
         template_header_upper = template_header.upper()
         possible_headers = header_mappings.get(template_header_upper, [])
@@ -75,10 +76,46 @@ def map_headers(df, header_mappings):
     return mapping
 
 def add_ch_code_prefix(df):
-    if 'Ch code' in df.columns:
-        df['Prefix'] = df['Ch code'].astype(str).str[:6]
-        df.insert(0, 'Prefix', df.pop('Prefix'))
-    return df
+    # for index, row in df.iterrows():
+    #     if row['Ch code'] is not None:
+    #         #row['Prefix'] = str(row['Ch code'])[:6]  # Extract first 6 characters as prefix
+    #         df.loc[index, ["Prefix"]] == 
+    #         print(str(row['Ch code'])[:6])
+    # return df
+
+    # df["Prefix"] = df["Ch code"].apply(lambda x: x[:6])
+    # return df.copy()
+
+    
+    # if 'CH CODE' in df.columns:
+    #     # Extract first 6 digits from 'CH CODE' column and store in 'Prefix'
+    #     df['Prefix'] = df['CH CODE'].astype(str).str.extract(r'^(\d{6})')
+    # else:
+    #     # If 'CH CODE' column doesn't exist, create an empty 'Prefix' column
+    #     df['Prefix'] = ''
+
+    # # Reorder columns to ensure 'Prefix' is the first column
+    # if 'Prefix' in df.columns:
+    #     cols = ['Prefix'] + [col for col in df.columns if col != 'Prefix']
+    #     df = df[cols]
+
+    # return df
+
+def process_each_sheet(uploaded_file):
+    try:
+        # Load the uploaded Excel file
+        xls = pd.ExcelFile(uploaded_file)
+        dfs = []
+
+        for sheet_name in xls.sheet_names:
+            # Read each sheet into a DataFrame
+            df = pd.read_excel(xls, sheet_name=sheet_name)
+            dfs.append(df)
+
+        return dfs
+    except Exception as e:
+        st.error(f"Error processing Excel sheets: {e}")
+        return None
 
 def main():
     # Step 1: Upload the file
@@ -92,69 +129,72 @@ def main():
         with st.status("Merging excels...", expanded=True) as status:
             try:
                 if uploaded_file.name.endswith('.xlsx'):
-                    df = pd.read_excel(uploaded_file)
+                    dfs = process_each_sheet(uploaded_file)
                 elif uploaded_file.name.endswith('.csv'):
                     df = pd.read_csv(uploaded_file, encoding='utf-8')
+                    dfs = [df]
             except UnicodeDecodeError:
                 status.update(label=f"Failed to read the CSV file with 'utf-8' encoding. Trying 'latin1' encoding. {uploaded_file.name}", state="error", expanded=True)
                 try:
                     df = pd.read_csv(uploaded_file, encoding='latin1')
+                    dfs = [df]
                 except UnicodeDecodeError:
-                    try: 
+                    try:
                         status.update(label=f"Failed to read the CSV file with 'latin1' encoding. Trying 'iso-8859-1' encoding. {uploaded_file.name}", state="error", expanded=True)
                         df = pd.read_csv(uploaded_file, encoding='iso-8859-1')
-                    except UnicodeDecodeError:    
+                        dfs = [df]
+                    except UnicodeDecodeError:
                         status.update(label=f"Failed to read the CSV file iso-8859-1 {uploaded_file.name}", state="error", expanded=False)
-                        st.stop
-                   
+                        st.stop()
+
             # Convert all column names to strings to avoid mixed-type warnings
-            df.columns = df.columns.astype(str)
-            
+            for df in dfs:
+                df.columns = df.columns.copy()
+                
             st.write("Uploaded file preview:")
-            st.dataframe(df.head())
+            st.dataframe(dfs[0].head())
 
-            # Step 3: Add CH CODE Prefix to First Column if CH CODE exists
-            df = add_ch_code_prefix(df)
-
-            # Step 4: Load header mappings from the database file
+            # Load header mappings from the database file
             header_mappings = load_header_mappings()
             if header_mappings is None:
                 return
 
-            # Step 5: Map the headers
-            st.write("Map the headers:")
-            mapping = map_headers(df, header_mappings)
-            st.write("Header Mapping:", mapping)
+            # Prepare final DataFrame to hold appended data
+            final_df = pd.DataFrame(columns=template_headers)
 
-            # Step 6: Extract values based on mapped headers
-            extracted_data = {}
-            for template_header, original_header in mapping.items():
-                if original_header is not None:
-                    # Convert all values to strings
-                    extracted_data[template_header] = df[original_header].copy()
-                else:
-                    extracted_data[template_header] = ''
+            for df in dfs:
+                # Step 3: Add CH CODE Prefix to First Column if CH CODE exists
+              
 
-            mapped_df = pd.DataFrame(extracted_data)
-            # st.write("Mapped DataFrame preview:")
-            # st.dataframe(mapped_df.head())
+                # Step 5: Map the headers
+                mapping = map_headers(df, header_mappings)
+                
+                # Check if the sheet contains at least two template headers
+                valid_headers = [header for header in mapping.values() if header is not None]
+                if len(valid_headers) < 2:
+                    st.write(f"Skipping sheet as it does not contain at least two template headers.")
+                    continue
+                
+                # st.write(f"Header Mapping for sheet:")
+                st.write("Header Mapping:", mapping)
 
-            # Step 7: Load the template Excel file and write the extracted values into it
-            template_df = pd.read_excel('template.xlsx')
-            # st.write("Template DataFrame preview before mapping:")
-            # st.dataframe(template_df.head())
+                # Step 6: Extract values based on mapped headers
+                extracted_data = {}
+                for template_header, original_header in mapping.items():
+                    if original_header is not None:
+                        extracted_data[template_header] = df[original_header].copy()
+                    else:
+                        extracted_data[template_header] = pd.Series([None] * len(df))
 
-            # Ensure the template headers match the extracted data headers
-            for template_header in template_headers:
-                if template_header in template_df.columns and template_header in mapped_df.columns:
-                    template_df[template_header] = mapped_df[template_header]
-
+                mapped_df = pd.DataFrame(extracted_data)
+                final_df = pd.concat([final_df, mapped_df], ignore_index=True)
+            final_df = add_ch_code_prefix(final_df)
             st.write("OUTPUT PREVIEW:")
-            st.dataframe(template_df.head())
+            st.dataframe(final_df.head())
 
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                template_df.to_excel(writer, index=False, sheet_name='Sheet1')
+                final_df.to_excel(writer, index=False, sheet_name='Sheet1')
 
                 # Auto-fit column widths
                 worksheet = writer.sheets['Sheet1']
@@ -181,7 +221,6 @@ def main():
             current_date = datetime.datetime.now().strftime("%Y%m%d")
             new_file_name = f"{current_date}-{original_file_name}.xlsx"
 
-            
             status.update(label="Process Complete!", state="complete", expanded=False)
 
         st.download_button(
