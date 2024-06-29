@@ -6,6 +6,7 @@ import os
 from openpyxl.utils import get_column_letter
 from openpyxl import Workbook
 
+
 def load_template_headers():
     try:
         # Load the template headers from the "Template Header" column of the external Excel file
@@ -112,6 +113,21 @@ def process_each_sheet(uploaded_file):
         return None
 
 def main():
+
+    st.title("Automation Selective tool")
+    st.markdown("""
+    ### Instructions:
+    1. Consider removing the design of Raw file if the first (1) COL and ROW is not HEADER
+    2. Before the automation please FEED the possible headers to make it accurate
+    3. Upload CSV/XLSX file
+    4. Download the OUTPUT file.
+    5. Expect it may be slow due to QUERY from BCRM.
+
+    (Note: It does not accept xls file, consider resave the file as csv or xlsx)
+    """)
+
+
+
     # Step 1: Upload the file
     uploaded_file = st.file_uploader("Upload an Excel or CSV file", type=["xlsx", "csv"])
 
