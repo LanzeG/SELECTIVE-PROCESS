@@ -126,8 +126,6 @@ def main():
     (Note: It does not accept xls file, consider resave the file as csv or xlsx)
     """)
 
-
-
     # Step 1: Upload the file
     uploaded_file = st.file_uploader("Upload an Excel or CSV file", type=["xlsx", "csv"])
 
