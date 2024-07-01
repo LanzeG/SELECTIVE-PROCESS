@@ -65,6 +65,7 @@ def run():
     2. Enter a possible header that corresponds to the selected template header.
     3. Click 'Update Excel File' to save the new mapping.
     4. To add a new template header, click the '+ Add' button, enter the new header name, and click 'Save New Header'.
+    5. To delete selected rows, select the checkboxes and click 'Delete Selected Rows'.
     """)
 
     # Check if adding a new template header
@@ -82,7 +83,6 @@ def run():
                     st.toast("Header already exists ❗")
                 else:
                     st.session_state.template_headers.append(new_header)
-                    # st.session_state.template_headers.sort()
                     st.session_state.adding_new_header = False
                     st.toast("New header added successfully! ✔️")
                     st.experimental_rerun()
@@ -129,7 +129,7 @@ def run():
                 except Exception as e:
                     st.toast(f"Error: {str(e)} 🥺")
         
-    # Display the updated mappings in a table format
+    # Display the updated mappings in a table format with selection checkboxes
     st.markdown("## Current Header Mappings")
     st.markdown("The table below shows the current mappings of template headers to their possible headers:")
 
@@ -137,12 +137,37 @@ def run():
     display_data = pd.DataFrame([(header, ", ".join(possibles)) for header, possibles in header_mappings.items()],
                                 columns=["Template Header", "Possible Headers"])
 
-    # Apply formatting to the table and set the size
-    st.dataframe(display_data.style.set_properties(**{
-    }).set_table_styles([{
-        'selector': 'thead th',
-        'props': [('background-color', 'cornflowerblue'), ('color', 'white')]
-    }]), height=600, width=1000)
+    # Add a selection checkbox for each row
+    display_data["Select"] = [False] * len(display_data)
+
+    # Display the dataframe with checkboxes
+    selected_rows = st.data_editor(display_data, key="data_editor", height=400, width=1000)
+
+    # Check if the delete button is pressed
+    if st.button("Delete Selected Rows"):
+        selected_indices = selected_rows[selected_rows["Select"]].index.tolist()
+        if selected_indices:
+            # Remove selected rows from header_mappings and template_headers
+            for idx in selected_indices:
+                template_header = display_data.loc[idx, "Template Header"]
+                if template_header in header_mappings:
+                    del header_mappings[template_header]
+                if template_header in st.session_state.template_headers:
+                    st.session_state.template_headers.remove(template_header)
+
+            # Save the updated mappings
+            if save_updated_mappings(header_mappings, file_path):
+                st.toast("Selected rows have been deleted successfully! ✔️")
+            else:
+                st.toast("Permission denied: The file may be open in another application. 🚫")
+            
+            # Rerun to refresh the display
+            st.experimental_rerun()
+        else:
+            st.toast("Please select at least one row to delete. 🚫")
+
+
+
 
 # Run the Streamlit app
 if __name__ == "__main__":

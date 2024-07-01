@@ -5,7 +5,31 @@ import datetime
 import os
 from openpyxl.utils import get_column_letter
 from openpyxl import Workbook
+import openpyxl
+from openpyxl import load_workbook
+import io
+import msoffcrypto
+from querydb import query_database
 
+def unlock_excel(file_content, password):
+    try:
+        # Use msoffcrypto to handle the password protection
+        decrypted = io.BytesIO()
+        office_file = msoffcrypto.OfficeFile(file_content)
+        office_file.load_key(password=password)
+        office_file.decrypt(decrypted)
+
+        # Load the decrypted file into openpyxl
+        decrypted.seek(0)
+        workbook = load_workbook(decrypted, read_only=False, data_only=True, keep_vba=False, keep_links=False)
+
+        # Save the unlocked workbook to a BytesIO object
+        unlocked_file = io.BytesIO()
+        workbook.save(unlocked_file)
+        unlocked_file.seek(0)
+        return unlocked_file
+    except Exception as e:
+        raise Exception(f"{str(e)}")
 
 def load_template_headers():
     try:
@@ -21,7 +45,7 @@ def load_template_headers():
     except Exception as e:
         st.error(f"Error loading template headers: {e}")
         return None
-
+    
 # Load template headers from the Excel file
 template_headers = load_template_headers()
 if template_headers is None:
@@ -67,33 +91,31 @@ def map_headers(df, header_mappings):
         mapping[template_header] = mapped_header
    
     return mapping
-
-# def add_ch_code_prefix(df):
-#     ch_code_col = None
-#     for col in df.columns:
-#         if col.strip().upper() == 'CH CODE':
-#             ch_code_col = col
-#             break
     
-#     if ch_code_col is None:
-#         print("CH CODE column not found in the uploaded file.")
-#         return df
+def add_ch_code_prefix(df):
+    # Check for 'CH CODE' column (case-insensitive)
+    ch_code_col = next((col for col in df.columns if col.strip().upper() == 'CH CODE'), None)
+    
+    if ch_code_col is None:
+        print("CH CODE column not found in the uploaded file.")
+        return df
 
-#     # Ensure 'PREFIX' column exists
-#     if 'PREFIX' not in df.columns:
-#         df['PREFIX'] = None
+    # Ensure 'PREFIX' column exists, initialize with None if it doesn't
+    if 'PREFIX' not in df.columns:
+        df['PREFIX'] = None
 
-#     for index, row in df.iterrows():
-#         ch_code = row[ch_code_col]
-#         if pd.notnull(ch_code) and isinstance(ch_code, str):
-#             # Remove hyphens and take the first 6 characters
-#             cleaned_code = ch_code.replace('-', '')
-#             prefix = cleaned_code[:6]  # Extract first 6 characters as prefix
-#             df.at[index, 'PREFIX'] = prefix  # Update the 'Prefix' column in the DataFrame
-#         else:
-#             df.at[index, 'PREFIX'] = None  # Handle NaN or NaT values
+    # Process each row to update 'PREFIX' column
+    for index, row in df.iterrows():
+        ch_code = row[ch_code_col]
+        if pd.notnull(ch_code) and isinstance(ch_code, str):
+            # Remove hyphens and take the first 6 characters
+            cleaned_code = ch_code.replace('-', '')
+            prefix = cleaned_code[:6]  # Extract first 6 characters as prefix
+            df.at[index, 'PREFIX'] = prefix  # Update the 'PREFIX' column in the DataFrame
+        else:
+            df.at[index, 'PREFIX'] = None  # Handle NaN or NaT values
 
-#     return df
+    return df
 
 
 def process_each_sheet(uploaded_file):
@@ -111,17 +133,30 @@ def process_each_sheet(uploaded_file):
     except Exception as e:
         st.error(f"Error processing Excel sheets: {e}")
         return None
+    
+# def fill_missing_headers(df, template_headers):
+#     for header in template_headers:
+#         if header not in df.columns:
+#             df[header] = None
+#     return df
+
+# def compare_dataframes(final_df, template_df):
+#     mismatched_rows = []
+#     for index, row in final_df.iterrows():
+#         if not row.equals(template_df.loc[index]):
+#             mismatched_rows.append(index)
+#     return mismatched_rows
 
 def main():
-
     st.title("Automation Selective tool")
     st.markdown("""
-    ### Instructions:
-    1. Consider removing the design of Raw file if the first (1) COL and ROW is not HEADER
-    2. Before the automation please FEED the possible headers to make it accurate
-    3. Upload CSV/XLSX file
-    4. Download the OUTPUT file.
-    5. Expect it may be slow due to QUERY from BCRM.
+    ### Instructions:            
+    1. Consider removing the password of Raw file
+    2. Consider removing the design of Raw file if the first (1) COL and ROW is not HEADER
+    3. Before the automation please FEED the possible headers to make it accurate
+    4. Upload CSV/XLSX file
+    5. Download the OUTPUT file.
+    6. Expect it may be slow due to QUERY from BCRM.
 
     (Note: It does not accept xls file, consider resave the file as csv or xlsx)
     """)
@@ -132,47 +167,78 @@ def main():
     if uploaded_file is not None:
         # Extract the original file name without extension
         original_file_name = os.path.splitext(uploaded_file.name)[0]
-
-        # Step 2: Read the uploaded file
-        with st.status("Merging excels...", expanded=True) as status:
+        
+        # Step 2: Check if file is an Excel file and prompt for password if encrypted
+        if uploaded_file.name.endswith('.xlsx'):
+            file_content = io.BytesIO(uploaded_file.getvalue())
             try:
-                if uploaded_file.name.endswith('.xlsx'):
-                    dfs = process_each_sheet(uploaded_file)
-                elif uploaded_file.name.endswith('.csv'):
+                # Try to load the workbook without a password
+                workbook = load_workbook(file_content, read_only=False, data_only=True, keep_vba=False, keep_links=False)
+                st.success("File is not password protected, proceeding with automation.")
+                dfs = process_each_sheet(uploaded_file)
+            except Exception:
+                password = st.text_input("Password", type="password")
+                if password:
+                    try:
+                        unlocked_file = unlock_excel(file_content, password)
+                        st.success("File unlocked successfully!")
+                        with st.spinner("Processing selectives..."):
+                            try:
+                                dfs = process_each_sheet(unlocked_file)
+                                st.write("Excel sheets processed successfully.")
+                            except Exception as e:
+                                st.error(f"Failed to process the unlocked file: {e}")
+                                st.stop()
+                    except Exception as e:
+                        st.error(str(e))
+                        st.stop()
+                else:
+                    st.info("Please provide a password to unlock the file.")
+                    st.stop()
+        elif uploaded_file.name.endswith('.csv'):
+            with st.spinner("Processing selectives..."):
+                try:
                     df = pd.read_csv(uploaded_file, encoding='utf-8')
                     dfs = [df]
-            except UnicodeDecodeError:
-                status.update(label=f"Failed to read the CSV file with 'utf-8' encoding. Trying 'latin1' encoding. {uploaded_file.name}", state="error", expanded=True)
-                try:
-                    df = pd.read_csv(uploaded_file, encoding='latin1')
-                    dfs = [df]
+                    st.write("CSV file processed successfully.")
                 except UnicodeDecodeError:
+                    st.error(f"Failed to read the CSV file with 'utf-8' encoding. Trying 'latin1' encoding. {uploaded_file.name}")
                     try:
-                        status.update(label=f"Failed to read the CSV file with 'latin1' encoding. Trying 'iso-8859-1' encoding. {uploaded_file.name}", state="error", expanded=True)
-                        df = pd.read_csv(uploaded_file, encoding='iso-8859-1')
+                        df = pd.read_csv(uploaded_file, encoding='latin1')
                         dfs = [df]
+                        st.write("CSV file processed successfully with 'latin1' encoding.")
                     except UnicodeDecodeError:
-                        status.update(label=f"Failed to read the CSV file iso-8859-1 {uploaded_file.name}", state="error", expanded=False)
-                        st.stop()
+                        st.error(f"Failed to read the CSV file with 'latin1' encoding. Trying 'iso-8859-1' encoding. {uploaded_file.name}")
+                        try:
+                            df = pd.read_csv(uploaded_file, encoding='iso-8859-1')
+                            dfs = [df]
+                            st.write("CSV file processed successfully with 'iso-8859-1' encoding.")
+                        except UnicodeDecodeError:
+                            st.error(f"Failed to read the CSV file with 'iso-8859-1' encoding. {uploaded_file.name}")
+                            st.stop()
+        
+        else:
+            st.info("Please upload a file.")
+            st.stop()
 
+        with st.status("Processing Selective...", expanded=False) as status:
             # Convert all column names to strings to avoid mixed-type warnings
             for df in dfs:
                 df.columns = df.columns.map(str)
-                
+            
             st.write("Uploaded file preview:")
             st.dataframe(dfs[0].head())
-
+            
             # Load header mappings from the database file
             header_mappings = load_header_mappings()
             if header_mappings is None:
-                return
+                st.stop()
 
             # Prepare final DataFrame to hold appended data
             final_df = pd.DataFrame(columns=template_headers)
 
             for df in dfs:
-                # Step 3: Add CH CODE Prefix to First Column if CH CODE exists
-                # df = add_ch_code_prefix(df)
+                
 
                 # Step 5: Map the headers
                 mapping = map_headers(df, header_mappings)
@@ -183,7 +249,7 @@ def main():
                     st.write(f"Skipping sheet as it does not contain at least two template headers.")
                     continue
                 
-                st.write("Header Mapping:", mapping)
+                st.write("Mapping Result:", mapping)
 
                 # Step 6: Extract values based on mapped headers
                 extracted_data = {}
@@ -193,13 +259,26 @@ def main():
                     else:
                         extracted_data[template_header] = pd.Series([None] * len(df))
 
-                mapped_df = pd.DataFrame(extracted_data)
-                final_df = pd.concat([final_df, mapped_df], ignore_index=True)
 
+                        mapped_df = pd.DataFrame(extracted_data)
+                final_df = pd.concat([final_df, mapped_df], ignore_index=True)
+            # Step 3: Add CH CODE Prefix to First Column if CH CODE exists
+            final_df = add_ch_code_prefix(final_df)
+            
             st.write("OUTPUT PREVIEW:")
             st.dataframe(final_df.head())
 
-            output = BytesIO()
+            # final_df = fill_missing_headers(final_df, template_header)
+
+            # template_header = query_database()
+
+            # mismatched_rows = compare_dataframes(final_df, template_df)
+            # if mismatched_rows:
+            #     st.write(f"Mismatched: {mismatched_rows}")
+            # else:
+            #     st.write("All rows match the expected template.")
+
+            output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 final_df.to_excel(writer, index=False, sheet_name='Sheet1')
 
@@ -228,7 +307,8 @@ def main():
             current_date = datetime.datetime.now().strftime("%Y%m%d")
             new_file_name = f"{current_date}-{original_file_name}.xlsx"
 
-            status.update(label="Process Complete!", state="complete", expanded=False)
+            status.update(label=f"Process Complete!. {uploaded_file.name}", expanded=False)
+        pass
 
         st.download_button(
             label="Download Mapped Excel",
