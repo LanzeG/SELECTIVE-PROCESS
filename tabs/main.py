@@ -8,7 +8,7 @@ from openpyxl import Workbook
 import openpyxl
 from openpyxl import load_workbook
 import io
-import msoffcrypto
+import msoffcrypto # type: ignore
 from querydb import query_database
 
 def unlock_excel(file_content, password):
@@ -123,16 +123,18 @@ def process_each_sheet(uploaded_file):
         # Load the uploaded Excel file
         xls = pd.ExcelFile(uploaded_file)
         dfs = []
+        sheet_names = []
 
         for sheet_name in xls.sheet_names:
             # Read each sheet into a DataFrame
             df = pd.read_excel(xls, sheet_name=sheet_name)
             dfs.append(df)
+            sheet_names.append(sheet_name)
 
-        return dfs
+        return dfs, sheet_names
     except Exception as e:
         st.error(f"Error processing Excel sheets: {e}")
-        return None
+        return None, None
     
 # def fill_missing_headers(df, template_headers):
 #     for header in template_headers:
@@ -151,14 +153,14 @@ def main():
     st.title("Automation Selective tool")
     st.markdown("""
     ### Instructions:            
-    1. Consider removing the password of Raw file
-    2. Consider removing the design of Raw file if the first (1) COL and ROW is not HEADER
-    3. Before the automation please FEED the possible headers to make it accurate
-    4. Upload CSV/XLSX file
+    1. Consider removing the design of Raw file if the first (1) COL and ROW is not HEADER
+    2. Before the automation please FEED the possible headers to make it accurate
+    3. Upload CSV/XLSX file
+    4. Input the CSV/XLSX password if the system detects it as encrypted.
     5. Download the OUTPUT file.
     6. Expect it may be slow due to QUERY from BCRM.
 
-    (Note: It does not accept xls file, consider resave the file as csv or xlsx)
+    (Note: It does not accept xls file, consider resave the file as csv or xlsx)    
     """)
 
     # Step 1: Upload the file
@@ -174,17 +176,17 @@ def main():
             try:
                 # Try to load the workbook without a password
                 workbook = load_workbook(file_content, read_only=False, data_only=True, keep_vba=False, keep_links=False)
-                st.success("File is not password protected, proceeding with automation.")
-                dfs = process_each_sheet(uploaded_file)
+                st.toast("File is not password protected, proceeding with automation! ✔️")
+                dfs, sheet_names = process_each_sheet(uploaded_file)
             except Exception:
                 password = st.text_input("Password", type="password")
                 if password:
                     try:
                         unlocked_file = unlock_excel(file_content, password)
-                        st.success("File unlocked successfully!")
+                        st.toast("File unlocked successfully! ✔️")
                         with st.spinner("Processing selectives..."):
                             try:
-                                dfs = process_each_sheet(unlocked_file)
+                                dfs, sheet_names = process_each_sheet(unlocked_file)
                                 st.write("Excel sheets processed successfully.")
                             except Exception as e:
                                 st.error(f"Failed to process the unlocked file: {e}")
@@ -236,20 +238,19 @@ def main():
 
             # Prepare final DataFrame to hold appended data
             final_df = pd.DataFrame(columns=template_headers)
-
-            for df in dfs:
+            
+            for df, sheet_name in zip(dfs, sheet_names):
                 
-
                 # Step 5: Map the headers
                 mapping = map_headers(df, header_mappings)
                 
                 # Check if the sheet contains at least two template headers
                 valid_headers = [header for header in mapping.values() if header is not None]
                 if len(valid_headers) < 2:
-                    st.write(f"Skipping sheet as it does not contain at least two template headers.")
+                    st.info(f"Skipping sheet ({sheet_name.upper()}) as it does not contain at least two template headers.")
                     continue
-                
-                st.write("Mapping Result:", mapping)
+                st.write(sheet_name)
+                st.json(mapping, expanded=False)
 
                 # Step 6: Extract values based on mapped headers
                 extracted_data = {}

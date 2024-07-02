@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, MetaData, Table, select
+from sqlalchemy  import create_engine, MetaData, Table, select # type: ignore
 import pandas as pd
 
 def query_database():
