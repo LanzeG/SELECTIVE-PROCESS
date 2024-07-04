@@ -6,10 +6,10 @@ import os
 from openpyxl.utils import get_column_letter
 from openpyxl import Workbook
 import openpyxl
-from openpyxl import load_workbook
 import io
 import msoffcrypto # type: ignore
-# from querydb import query_database
+from openpyxl import load_workbook
+from querydb import process_uploaded_file
 
 def unlock_excel(file_content, password):
     try:
@@ -149,6 +149,12 @@ def process_each_sheet(uploaded_file):
 #             mismatched_rows.append(index)
 #     return mismatched_rows
 
+def set_text_format(worksheet):
+    """Set all cells in the worksheet to text format."""
+    for row in worksheet.iter_rows():
+        for cell in row:
+            cell.number_format = '@'
+
 def main():
     st.title("Automation Selective tool")
     st.markdown("""
@@ -163,18 +169,14 @@ def main():
     (Note: It does not accept xls file, consider resave the file as csv or xlsx)    
     """)
 
-    # Step 1: Upload the file
     uploaded_file = st.file_uploader("Upload an Excel or CSV file", type=["xlsx", "csv"])
 
     if uploaded_file is not None:
-        # Extract the original file name without extension
         original_file_name = os.path.splitext(uploaded_file.name)[0]
-        
-        # Step 2: Check if file is an Excel file and prompt for password if encrypted
+
         if uploaded_file.name.endswith('.xlsx'):
             file_content = io.BytesIO(uploaded_file.getvalue())
             try:
-                # Try to load the workbook without a password
                 workbook = load_workbook(file_content, read_only=False, data_only=True, keep_vba=False, keep_links=False)
                 st.toast("File is not password protected, proceeding with automation! ✔️")
                 dfs, sheet_names = process_each_sheet(uploaded_file)
@@ -218,31 +220,27 @@ def main():
                         except UnicodeDecodeError:
                             st.error(f"Failed to read the CSV file with 'iso-8859-1' encoding. {uploaded_file.name}")
                             st.stop()
-        
+
         else:
             st.info("Please upload a file.")
             st.stop()
 
         with st.status("Processing Selective...", expanded=False) as status:
-            # Convert all column names to strings to avoid mixed-type warnings
             for df in dfs:
                 df.columns = df.columns.map(str)
-            
+
             st.write("Uploaded file preview:")
             st.dataframe(dfs[0].head())
-            
-            # Load header mappings from the database file
+
             header_mappings = load_header_mappings()
             if header_mappings is None:
                 st.stop()
 
-            # Prepare final DataFrame to hold appended data
-            final_df = pd.DataFrame(columns=template_headers)
-            
+            final_valid_df = pd.DataFrame(columns=template_headers)
+            final_invalid_df = pd.DataFrame(columns=template_headers)
+
             for df, sheet_name in zip(dfs, sheet_names):
-                
                 mapping = map_headers(df, header_mappings)
-                
                 valid_headers = [header for header in mapping.values() if header is not None]
                 if len(valid_headers) < 2:
                     st.info(f"Skipping sheet ({sheet_name.upper()}) as it does not contain at least two template headers.")
@@ -257,60 +255,84 @@ def main():
                     else:
                         extracted_data[template_header] = pd.Series([None] * len(df))
                 mapped_df = pd.DataFrame(extracted_data)
-                final_df = pd.concat([final_df, mapped_df], ignore_index=True)
 
-            final_df = add_ch_code_prefix(final_df)
+                valid_df, invalid_df = process_uploaded_file(mapped_df)
+                final_valid_df = pd.concat([final_valid_df, valid_df], ignore_index=True)
+                final_invalid_df = pd.concat([final_invalid_df, invalid_df], ignore_index=True)
+
+            final_valid_df = add_ch_code_prefix(final_valid_df)
+            final_invalid_df = add_ch_code_prefix(final_invalid_df)
+
+            st.write("Valid Data OUTPUT PREVIEW:")
+            st.dataframe(final_valid_df.head())
+
+            st.write("Invalid Data OUTPUT PREVIEW:")
+            st.dataframe(final_invalid_df.head())
+
+            output_valid = io.BytesIO()
+            output_invalid = io.BytesIO()
             
-            
-            st.write("OUTPUT PREVIEW:")
-            st.dataframe(final_df.head())
+            current_date = datetime.datetime.now().strftime("%Y%m%d")
+            valid_file_name = f"{current_date}-{original_file_name}-valid.xlsx"
+            invalid_file_name = f"{current_date}-{original_file_name}-invalid.xlsx"
 
-            # final_df = fill_missing_headers(final_df, template_header)
-
-            # template_header = query_database()
-
-            # mismatched_rows = compare_dataframes(final_df, template_df)
-            # if mismatched_rows:
-            #     st.write(f"Mismatched: {mismatched_rows}")
-            # else:
-            #     st.write("All rows match the expected template.")
-
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                final_df.to_excel(writer, index=False, sheet_name='Sheet1')
-
-                # Auto-fit column widths
+            with pd.ExcelWriter(output_valid, engine='openpyxl') as writer:
+                final_valid_df.to_excel(writer, index=False, sheet_name='Sheet1')
                 worksheet = writer.sheets['Sheet1']
+                set_text_format(worksheet)
                 for col in worksheet.columns:
                     max_length = 0
-                    column_letter = col[0].column_letter  # Get the column letter
+                    column_letter = col[0].column_letter
                     for cell in col:
-                        try:  # Necessary to avoid error on empty cells
+                        try:
                             if isinstance(cell.value, (int, float)):
-                                cell_value_str = f"{cell.value:.0f}"  # Format as integer without decimal places
+                                cell_value_str = f"{cell.value:.0f}"
                             else:
                                 cell_value_str = str(cell.value)
-                            
                             if len(cell_value_str) > max_length:
                                 max_length = len(cell_value_str)
                         except:
                             pass
                     adjusted_width = (max_length + 2) * 1.2
                     worksheet.column_dimensions[column_letter].width = adjusted_width
-            
-            output.seek(0)
 
-            # Step 8: Provide download link for the templated Excel file
-            current_date = datetime.datetime.now().strftime("%Y%m%d")
-            new_file_name = f"{current_date}-{original_file_name}.xlsx"
+            output_valid.seek(0)
 
-            status.update(label=f"Process Complete!. {uploaded_file.name}", expanded=False)
-        pass
+            with pd.ExcelWriter(output_invalid, engine='openpyxl') as writer:
+                final_invalid_df.to_excel(writer, index=False, sheet_name='Sheet1')
+                worksheet = writer.sheets['Sheet1']
+                set_text_format(worksheet)
+                for col in worksheet.columns:
+                    max_length = 0
+                    column_letter = col[0].column_letter
+                    for cell in col:
+                        try:
+                            if isinstance(cell.value, (int, float)):
+                                cell_value_str = f"{cell.value:.0f}"
+                            else:
+                                cell_value_str = str(cell.value)
+                            if len(cell_value_str) > max_length:
+                                max_length = len(cell_value_str)
+                        except:
+                            pass
+                    adjusted_width = (max_length + 2) * 1.2
+                    worksheet.column_dimensions[column_letter].width = adjusted_width
+
+            output_invalid.seek(0)
+
+            status.update(label=f"Process Complete! {uploaded_file.name}", expanded=False)
+        
+        st.download_button(
+            label="Download Valid Data",
+            data=output_valid,
+            file_name=valid_file_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
         st.download_button(
-            label="Download Mapped Excel",
-            data=output,
-            file_name=new_file_name,
+            label="Download Invalid Data",
+            data=output_invalid,
+            file_name=invalid_file_name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 

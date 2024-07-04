@@ -1,133 +1,94 @@
-# from sqlalchemy import create_engine, MetaData, Table, select, and_, or_
-# import pandas as pd
-
-# def query_database():
-#     engine = create_engine(
-#         'mysql+pymysql://{user}:{pw}@{host}/{db}'.format(
-#             user="ljbernas_bcp",
-#             pw="$C4Ov9P52n1sh",
-#             host="192.168.15.197",
-#             db="bcrm"
-#         )
-#     )
-
-#     connection = engine.connect()
-#     metadata = MetaData()
-#     leads_result = Table('leads_result', metadata, autoload_with=engine)
-#     leads = Table('leads', metadata, autoload_with=engine)
-#     client = Table('client', metadata, autoload_with=engine)
-#     users = Table('users', metadata, autoload_with=engine)
-#     leads_status = Table('leads_status', metadata, autoload_with=engine)
-#     leads_substatus = Table('leads_substatus', metadata, autoload_with=engine)
-#     leads_users = users.alias('leads_users')
-
-#     query = select(
-#         client.c.client_name.label('campaign'),
-#         leads_result.c.leads_result_id.label('ResultID'),
-#         users.c.users_username.label('Agent'),
-#         leads.c.leads_chcode.label('chCode'),
-#         leads.c.leads_chname.label('chName'),
-#         leads.c.leads_placement.label('placement'),
-#         leads.c.leads_acctno.label('AccountNumber'),
-#         leads_status.c.leads_status_name.label('Status'),
-#         leads_substatus.c.leads_substatus_name.label('subStatus'),
-#         leads_result.c.leads_result_amount.label('Amount'),
-#         leads_result.c.leads_result_sdate.label('StartDate'),
-#         leads_result.c.leads_result_edate.label('EndDate'),
-#         leads_result.c.leads_result_ornumber.label('ORNumber'),
-#         leads_result.c.leads_result_comment.label('Notes'),
-#         leads.c.leads_new_address.label('NewAddress'),
-#         leads.c.leads_new_contact.label('NewContact'),
-#         leads_result.c.leads_result_ts.label('ResultDate'),
-#         leads_result.c.leads_result_source.label('source'),
-#         leads.c.leads_endo_date.label('EndoDate'),
-#         leads.c.leads_ob.label('OB'),
-#         leads_result.c.leads_result_barcode_date
-#     ).select_from(
-#         leads_result
-#         .outerjoin(leads, leads_result.c.leads_result_lead == leads.c.leads_id)
-#         .outerjoin(client, leads.c.leads_client_id == client.c.client_id)
-#         .outerjoin(users, leads_result.c.leads_result_users == users.c.users_id)
-#         .outerjoin(leads_users, leads_users.c.users_id == leads.c.leads_users_id)
-#         .outerjoin(leads_status, leads_result.c.leads_result_status_id == leads_status.c.leads_status_id)
-#         .outerjoin(leads_substatus, leads_result.c.leads_result_substatus_id == leads_substatus.c.leads_substatus_id)
-#     ).where(
-#         leads_users.c.users_username != 'POUT'
-#     )
-
-#     result = connection.execute(query)
-#     rows = result.fetchall()
-#     connection.close()
-#     return pd.DataFrame(rows, columns=query.columns.keys())
-
-# # Execute the function and get the data as a DataFrame
-# df = query_database()
-# print(df)
-import streamlit as st
-from sqlalchemy import create_engine, MetaData, Table, select, and_, or_
+import pymysql
 import pandas as pd
+from datetime import datetime
 
-def query_database():
-    engine = create_engine(
-        'mysql+pymysql://{user}:{pw}@{host}/{db}'.format(
-            user="ljbernas_bcp",
-            pw="$C4Ov9P52n1sh",
-            host="192.168.15.197",
-            db="bcrm"
-        )
+# Database connection parameters
+DB_HOST = '192.168.15.197'
+DB_USER = 'ljbernas_bcp'
+DB_PASSWORD = '$C4Ov9P52n1sh'
+DB_NAME = 'bcrm'
+DB_CHARSET = 'utf8mb4'
+
+def query_database(account_number, result_date):
+    connection = pymysql.connect(
+        host=DB_HOST,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
+        charset=DB_CHARSET,
+        cursorclass=pymysql.cursors.DictCursor
     )
+    
+    query = """
+        SELECT
+            `client`.`client_name` AS 'campaign',
+            `leads_result`.`leads_result_id` AS 'ResultID',
+            `users`.`users_username` AS 'Agent',
+            `leads`.`leads_chcode` AS 'chCode',
+            `leads`.`leads_chname` AS 'chName',
+            `leads`.`leads_placement` AS 'placement',
+            `leads`.`leads_acctno` AS 'AccountNumber',
+            `leads_status`.`leads_status_name` AS 'Status',
+            `leads_result`.`leads_result_amount` AS 'Amount',
+            `leads_result`.`leads_result_ts` AS 'ResultDate',
+            `leads_result`.`leads_result_source` AS 'source',
+            `leads`.`leads_endo_date` AS 'EndoDate',
+            `leads`.`leads_ob` AS 'OB',
+            leads_result.`leads_result_barcode_date`
+        FROM `bcrm`.`leads_result`
+        LEFT JOIN `bcrm`.`leads` ON (`leads_result`.`leads_result_lead` = `leads`.`leads_id`)
+        LEFT JOIN `bcrm`.`client` ON (`leads`.`leads_client_id` = `client`.`client_id`)
+        LEFT JOIN `bcrm`.`users` ON (`leads_result`.`leads_result_users` = `users`.`users_id`)
+        LEFT JOIN `bcrm`.`users` AS leads_users ON (leads_users.`users_id` = leads.`leads_users_id`)
+        LEFT JOIN `bcrm`.`leads_status` ON (`leads_result`.`leads_result_status_id` = `leads_status`.`leads_status_id`)
+        LEFT JOIN `bcrm`.`leads_substatus` ON (`leads_result`.`leads_result_substatus_id` = `leads_substatus`.`leads_substatus_id`)
+        WHERE
+            `leads_users`.`users_username` <> 'POUT' 
+            AND `leads`.`leads_acctno` = %s
+            AND DATE(`leads_result`.`leads_result_ts`) = %s;
+    """
+    
+    with connection:
+        with connection.cursor() as cursor:
+            cursor.execute(query, (account_number, result_date))
+            result = cursor.fetchone()
+            return result
 
-    connection = engine.connect()
-    metadata = MetaData()
-    leads_result = Table('leads_result', metadata, autoload_with=engine)
-    leads = Table('leads', metadata, autoload_with=engine)
-    client = Table('client', metadata, autoload_with=engine)
-    users = Table('users', metadata, autoload_with=engine)
-    leads_status = Table('leads_status', metadata, autoload_with=engine)
-    leads_substatus = Table('leads_substatus', metadata, autoload_with=engine)
-    leads_users = users.alias('leads_users')
+def validate_data(uploaded_df):
+    valid_data = []
+    invalid_data = []
 
-    query = select(
-        client.c.client_name.label('campaign'),
-        leads_result.c.leads_result_id.label('ResultID'),
-        users.c.users_username.label('Agent'),
-        leads.c.leads_chcode.label('chCode'),
-        leads.c.leads_chname.label('chName'),
-        leads.c.leads_placement.label('placement'),
-        leads.c.leads_acctno.label('AccountNumber'),
-        leads_status.c.leads_status_name.label('Status'),
-        leads_substatus.c.leads_substatus_name.label('subStatus'),
-        leads_result.c.leads_result_amount.label('Amount'),
-        leads_result.c.leads_result_sdate.label('StartDate'),
-        leads_result.c.leads_result_edate.label('EndDate'),
-        leads_result.c.leads_result_ornumber.label('ORNumber'),
-        # leads_result.c.leads_result_comment.label('Notes'),
-        # leads.c.leads_new_address.label('NewAddress'),
-        # leads.c.leads_new_contact.label('NewContact'),
-        leads_result.c.leads_result_ts.label('ResultDate'),
-        leads_result.c.leads_result_source.label('source'),
-        leads.c.leads_endo_date.label('EndoDate'),
-        leads.c.leads_ob.label('OB'),
-        leads_result.c.leads_result_barcode_date
-    ).select_from(
-        leads_result
-        .outerjoin(leads, leads_result.c.leads_result_lead == leads.c.leads_id)
-        .outerjoin(client, leads.c.leads_client_id == client.c.client_id)
-        .outerjoin(users, leads_result.c.leads_result_users == users.c.users_id)
-        .outerjoin(leads_users, leads_users.c.users_id == leads.c.leads_users_id)
-        .outerjoin(leads_status, leads_result.c.leads_result_status_id == leads_status.c.leads_status_id)
-        .outerjoin(leads_substatus, leads_result.c.leads_result_substatus_id == leads_substatus.c.leads_substatus_id)
-    ).where(
-        leads_users.c.users_username != 'POUT'
-    ).limit(50)
+    for index, row in uploaded_df.iterrows():
+        account_number = row['ACCOUNT NUMBER']
+        result_date = row['DATE']
 
-    result = connection.execute(query)
-    rows = result.fetchall()
-    connection.close()
-    return pd.DataFrame(rows, columns=query.columns.keys())
+        if pd.notna(account_number) and pd.notna(result_date):
+            result_date_str = datetime.strptime(result_date, "%Y-%m-%d").strftime("%Y-%m-%d")
+            db_record = query_database(account_number, result_date_str)
 
-# Execute the function and get the data as a DataFrame
-df = query_database()
+            if db_record:
+                valid_data.append(row.to_dict())
+            else:
+                invalid_data.append(row.to_dict())
+        else:
+            invalid_data.append(row.to_dict())
 
-# Display the dataframe using st.dataframe
-st.dataframe(df)
+    valid_df = pd.DataFrame(valid_data)
+    invalid_df = pd.DataFrame(invalid_data)
+
+    return valid_df, invalid_df
+
+def add_autoid_and_prefix(df):
+    if 'CH CODE' in df.columns:
+        df['PREFIX'] = df['CH CODE'].apply(lambda x: x.replace('-', '')[:6] if pd.notna(x) else None)
+
+    df['AUTOID'] = range(100000, 100000 + len(df))
+    return df
+
+def process_uploaded_file(uploaded_df):
+    valid_df, invalid_df = validate_data(uploaded_df)
+
+    valid_df = add_autoid_and_prefix(valid_df)
+    invalid_df = add_autoid_and_prefix(invalid_df)
+
+    return valid_df, invalid_df
