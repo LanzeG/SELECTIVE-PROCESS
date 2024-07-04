@@ -256,7 +256,7 @@ def main():
                         extracted_data[template_header] = pd.Series([None] * len(df))
                 mapped_df = pd.DataFrame(extracted_data)
 
-                valid_df, invalid_df = process_uploaded_file(mapped_df)
+                valid_df, invalid_df = process_uploaded_file(mapped_df, mapping)
                 final_valid_df = pd.concat([final_valid_df, valid_df], ignore_index=True)
                 final_invalid_df = pd.concat([final_invalid_df, invalid_df], ignore_index=True)
 

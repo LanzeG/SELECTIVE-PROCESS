@@ -1,94 +1,91 @@
+# querydb.py
+
 import pymysql
 import pandas as pd
-from datetime import datetime
 
-# Database connection parameters
-DB_HOST = '192.168.15.197'
-DB_USER = 'ljbernas_bcp'
-DB_PASSWORD = '$C4Ov9P52n1sh'
-DB_NAME = 'bcrm'
-DB_CHARSET = 'utf8mb4'
-
-def query_database(account_number, result_date):
-    connection = pymysql.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME,
-        charset=DB_CHARSET,
+def get_database_connection():
+    return pymysql.connect(
+        host='192.168.15.197',
+        user='ljbernas_bcp',
+        password='$C4Ov9P52n1sh',
+        database='bcrm',
+        charset='utf8mb4',
         cursorclass=pymysql.cursors.DictCursor
     )
-    
-    query = """
-        SELECT
-            `client`.`client_name` AS 'campaign',
-            `leads_result`.`leads_result_id` AS 'ResultID',
-            `users`.`users_username` AS 'Agent',
-            `leads`.`leads_chcode` AS 'chCode',
-            `leads`.`leads_chname` AS 'chName',
-            `leads`.`leads_placement` AS 'placement',
-            `leads`.`leads_acctno` AS 'AccountNumber',
-            `leads_status`.`leads_status_name` AS 'Status',
-            `leads_result`.`leads_result_amount` AS 'Amount',
-            `leads_result`.`leads_result_ts` AS 'ResultDate',
-            `leads_result`.`leads_result_source` AS 'source',
-            `leads`.`leads_endo_date` AS 'EndoDate',
-            `leads`.`leads_ob` AS 'OB',
-            leads_result.`leads_result_barcode_date`
-        FROM `bcrm`.`leads_result`
-        LEFT JOIN `bcrm`.`leads` ON (`leads_result`.`leads_result_lead` = `leads`.`leads_id`)
-        LEFT JOIN `bcrm`.`client` ON (`leads`.`leads_client_id` = `client`.`client_id`)
-        LEFT JOIN `bcrm`.`users` ON (`leads_result`.`leads_result_users` = `users`.`users_id`)
-        LEFT JOIN `bcrm`.`users` AS leads_users ON (leads_users.`users_id` = leads.`leads_users_id`)
-        LEFT JOIN `bcrm`.`leads_status` ON (`leads_result`.`leads_result_status_id` = `leads_status`.`leads_status_id`)
-        LEFT JOIN `bcrm`.`leads_substatus` ON (`leads_result`.`leads_result_substatus_id` = `leads_substatus`.`leads_substatus_id`)
-        WHERE
-            `leads_users`.`users_username` <> 'POUT' 
-            AND `leads`.`leads_acctno` = %s
-            AND DATE(`leads_result`.`leads_result_ts`) = %s;
-    """
-    
-    with connection:
-        with connection.cursor() as cursor:
-            cursor.execute(query, (account_number, result_date))
-            result = cursor.fetchone()
-            return result
 
-def validate_data(uploaded_df):
+def query_database(mapped_data):
+    connection = get_database_connection()
+    try:
+        with connection.cursor() as cursor:
+            base_query = """
+            SELECT
+                `client`.`client_name` AS 'campaign',
+                `leads_result`.`leads_result_id` AS 'ResultID',
+                `users`.`users_username` AS 'Agent',
+                `leads`.`leads_chcode` AS 'chCode',
+                `leads`.`leads_chname` AS 'chName',
+                `leads`.`leads_placement` AS 'placement',
+                `leads`.`leads_acctno` AS 'AccountNumber',
+                `leads_status`.`leads_status_name` AS 'Status',
+                `leads_result`.`leads_result_amount` AS 'Amount',
+                `leads_result`.`leads_result_ts` AS 'ResultDate',
+                `leads_result`.`leads_result_source` AS 'source',
+                `leads`.`leads_endo_date` AS 'EndoDate',
+                `leads`.`leads_ob` AS 'OB',
+                leads_result.`leads_result_barcode_date`
+            FROM `bcrm`.`leads_result`
+            LEFT JOIN `bcrm`.`leads` ON (`leads_result`.`leads_result_lead` = `leads`.`leads_id`)
+            LEFT JOIN `bcrm`.`client` ON (`leads`.`leads_client_id` = `client`.`client_id`)
+            LEFT JOIN `bcrm`.`users` ON (`leads_result`.`leads_result_users` = `users`.`users_id`)
+            LEFT JOIN `bcrm`.`users` AS leads_users ON (leads_users.`users_id` = leads.`leads_users_id`)
+            LEFT JOIN `bcrm`.`leads_status` ON (`leads_result`.`leads_result_status_id` = `leads_status`.`leads_status_id`)
+            LEFT JOIN `bcrm`.`leads_substatus` ON (`leads_result`.`leads_result_substatus_id` = `leads_substatus`.`leads_substatus_id`)
+            WHERE `leads_users`.`users_username` <> 'POUT'
+            """
+            
+            conditions = []
+            values = []
+            for col, db_col in mapped_data.items():
+                if db_col and pd.notna(col):
+                    conditions.append(f"`leads`.`{db_col}` = %s")
+                    values.append(col)
+            
+            if conditions:
+                query = base_query + " AND " + " AND ".join(conditions)
+            else:
+                query = base_query
+
+            cursor.execute(query, values)
+            result = cursor.fetchall()
+            
+            return result
+    finally:
+        connection.close()
+
+def process_uploaded_file(df, header_mapping):
     valid_data = []
     invalid_data = []
 
-    for index, row in uploaded_df.iterrows():
-        account_number = row['ACCOUNT NUMBER']
-        result_date = row['DATE']
+    for index, row in df.iterrows():
+        mapped_data = {header_mapping[col]: row[col] for col in df.columns if col in header_mapping and header_mapping[col]}
 
-        if pd.notna(account_number) and pd.notna(result_date):
-            result_date_str = datetime.strptime(result_date, "%Y-%m-%d").strftime("%Y-%m-%d")
-            db_record = query_database(account_number, result_date_str)
+        # Prioritize account number and date for the query
+        account_number = mapped_data.get('AccountNumber')
+        date = mapped_data.get('ResultDate')
 
-            if db_record:
-                valid_data.append(row.to_dict())
-            else:
-                invalid_data.append(row.to_dict())
+        if pd.isna(account_number) or pd.isna(date):
+            # If either account number or date is missing, fall back to other fields
+            result = query_database(mapped_data)
         else:
-            invalid_data.append(row.to_dict())
+            date_str = pd.to_datetime(date).strftime('%Y-%m-%d')
+            result = query_database({**mapped_data, 'AccountNumber': account_number, 'ResultDate': date_str})
+
+        if result:
+            valid_data.append(row)
+        else:
+            invalid_data.append(row)
 
     valid_df = pd.DataFrame(valid_data)
     invalid_df = pd.DataFrame(invalid_data)
-
-    return valid_df, invalid_df
-
-def add_autoid_and_prefix(df):
-    if 'CH CODE' in df.columns:
-        df['PREFIX'] = df['CH CODE'].apply(lambda x: x.replace('-', '')[:6] if pd.notna(x) else None)
-
-    df['AUTOID'] = range(100000, 100000 + len(df))
-    return df
-
-def process_uploaded_file(uploaded_df):
-    valid_df, invalid_df = validate_data(uploaded_df)
-
-    valid_df = add_autoid_and_prefix(valid_df)
-    invalid_df = add_autoid_and_prefix(invalid_df)
 
     return valid_df, invalid_df
