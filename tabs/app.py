@@ -85,7 +85,7 @@ def run():
                     st.session_state.template_headers.append(new_header)
                     st.session_state.adding_new_header = False
                     st.toast("New header added successfully! ✔️")
-                    st.experimental_rerun()
+                    st.rerun()
             except Exception as e:
                 st.toast(f"Error: {str(e)}")
     else:
@@ -102,7 +102,7 @@ def run():
             # Button to add a new template header
             if st.button("➕"):
                 st.session_state.adding_new_header = True
-                st.experimental_rerun()
+                st.rerun()
         
         # Text input for the possible header
         possible_header = st.text_input(f"Enter a possible header for '{selected_header}'")
@@ -162,7 +162,7 @@ def run():
                 st.toast("Permission denied: The file may be open in another application. 🚫")
             
             # Rerun to refresh the display
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.toast("Please select at least one row to delete. 🚫")
 

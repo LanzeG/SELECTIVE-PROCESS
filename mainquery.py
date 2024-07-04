@@ -9,6 +9,12 @@ import openpyxl
 from openpyxl import load_workbook
 import io
 import msoffcrypto # type: ignore
+# from querydb import query_database
+import pymysql 
+import pandas as pd
+from sqlalchemy import create_engine, MetaData, Table, select # type: ignore
+import concurrent.futures
+
 
 
 def unlock_excel(file_content, password):
@@ -50,7 +56,7 @@ def load_template_headers():
 template_headers = load_template_headers()
 if template_headers is None:
     st.stop()
-
+    
 def load_header_mappings():
     try:
         # Load the header mappings from an external Excel file
@@ -73,6 +79,8 @@ def load_header_mappings():
     except Exception as e:
         st.error(f"Error loading header mappings: {e}")
         return None
+    
+    
 
 def map_headers(df, header_mappings):
     if header_mappings is None:
@@ -149,7 +157,109 @@ def process_each_sheet(uploaded_file):
 #             mismatched_rows.append(index)
 #     return mismatched_rows
 
+
+# Define your DataFrame
+
+
+def query_database(account_number, query_date):
+    try:
+        # Establish connection to your database
+        connection = pymysql.connect(host='192.168.15.197',
+                                     user='ljbernas_bcp',
+                                     password='$C4Ov9P52n1sh',
+                                     database='bcrm',
+                                     charset='utf8mb4',
+                                     cursorclass=pymysql.cursors.DictCursor)
+
+        # Prepare SQL query with placeholders for dynamic values
+        sql = """
+        SELECT
+            `client`.`client_name` AS 'campaign',
+            `leads_result`.`leads_result_id` AS 'ResultID',
+            `users`.`users_username` AS 'Agent',
+            `leads`.`leads_chcode` AS 'chCode',
+            `leads`.`leads_chname` AS 'chName',
+            `leads`.`leads_placement` AS 'placement',
+            `leads`.`leads_acctno` AS 'AccountNumber',
+            `leads_status`.`leads_status_name` AS 'Status',
+            `leads_result`.`leads_result_amount` AS 'Amount',
+            `leads_result`.`leads_result_ts` AS 'ResultDate',
+            `leads_result`.`leads_result_source` AS 'source',
+            `leads`.`leads_endo_date` AS 'EndoDate',
+            `leads`.`leads_ob` AS 'OB',
+            leads_result.`leads_result_barcode_date`
+        FROM `bcrm`.`leads_result`
+        LEFT JOIN `bcrm`.`leads` ON (`leads_result`.`leads_result_lead` = `leads`.`leads_id`)
+        LEFT JOIN `bcrm`.`client` ON (`leads`.`leads_client_id` = `client`.`client_id`)
+        LEFT JOIN `bcrm`.`users` ON (`leads_result`.`leads_result_users` = `users`.`users_id`)
+        LEFT JOIN `bcrm`.`users` AS leads_users ON (leads_users.`users_id` = leads.`leads_users_id`)
+        LEFT JOIN `bcrm`.`leads_status` ON (`leads_result`.`leads_result_status_id` = `leads_status`.`leads_status_id`)
+        LEFT JOIN `bcrm`.`leads_substatus` ON (`leads_result`.`leads_result_substatus_id` = `leads_substatus`.`leads_substatus_id`) 
+        WHERE
+            `leads_users`.`users_username` <> 'POUT' 
+            AND `leads`.`leads_acctno` = %s
+            AND DATE(`leads_result`.`leads_result_ts`) = %s;
+        """
+
+        # Execute SQL query with parameters
+        with connection.cursor() as cursor:
+            cursor.execute(sql, (account_number, query_date))
+            results = cursor.fetchall()
+
+        return results[0] if results else None
+
+    except Exception as e:
+        print(f"Error querying database: {e}")
+
+    finally:
+        if connection:
+            connection.close()
+
+def fill_missing_fields(final_df, template_headers):
+    def query_and_update(row):
+        account_number = row['ACCOUNTNUMBER']
+        query_date = row['DATE']  # Assuming 'DATE' column exists in final_df
+
+        if pd.notna(account_number) and pd.notna(query_date):
+            try:
+                result = query_database(account_number, query_date)
+                if result:
+                    column_mapping = {
+                        'chName': 'NAME',
+                        'campaign': 'CAMPAIGN',
+                        'Agent': 'AGENT',
+                        'chCode': 'CH CODE',
+                        'placement': 'PLACEMENT',
+                        'AccountNumber': 'ACCOUNTNUMBER',
+                        'Status': 'STATUS',
+                        'Amount': 'AMOUNT',
+                        'ResultDate': 'DATE',
+                        'source': 'PAYMENT SOURCE'
+                        # Add more mappings as needed
+                    }
+
+                    # Update final_df with query result
+                    for key, value in result.items():
+                        if key in column_mapping:
+                            final_df.loc[row.name, column_mapping[key]] = value
+
+            except Exception as e:
+                st.error(f"Error querying database for row {row.name}: {e}")
+
+    # Use ThreadPoolExecutor to query database concurrently
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = [executor.submit(query_and_update, row) for _, row in final_df.iterrows()]
+        concurrent.futures.wait(futures)
+
+    return final_df
+
 def main():
+    # Load template headers from the Excel file
+    template_headers = load_template_headers()  # Ensure this function returns the correct headers
+    
+    if template_headers is None:
+        st.stop()
+
     st.title("Automation Selective tool")
     st.markdown("""
     ### Instructions:            
@@ -159,7 +269,7 @@ def main():
     4. Input the CSV/XLSX password if the system detects it as encrypted.
     5. Download the OUTPUT file.
     6. Expect it may be slow due to QUERY from BCRM.
-
+    
     (Note: It does not accept xls file, consider resave the file as csv or xlsx)    
     """)
 
@@ -260,24 +370,25 @@ def main():
                     else:
                         extracted_data[template_header] = pd.Series([None] * len(df))
 
-
-                        mapped_df = pd.DataFrame(extracted_data)
+                mapped_df = pd.DataFrame(extracted_data)
                 final_df = pd.concat([final_df, mapped_df], ignore_index=True)
-            # Step 3: Add CH CODE Prefix to First Column if CH CODE exists
+
+                # Debug: Check the intermediate final_df
+                st.write(f"Intermediate final_df after processing sheet {sheet_name}:")
+                st.dataframe(final_df.head())
+            
+            # Step 7: Fill missing fields with None or default values
+            final_df = fill_missing_fields(final_df, template_headers)
+            
+            # Debug: Check the final_df after filling missing fields
+            st.write("final_df after filling missing fields:")
+            st.dataframe(final_df.head())
+
+            # Step 8: Add CH CODE Prefix to First Column if CH CODE exists
             final_df = add_ch_code_prefix(final_df)
             
             st.write("OUTPUT PREVIEW:")
             st.dataframe(final_df.head())
-
-            # final_df = fill_missing_headers(final_df, template_header)
-
-            # template_header = query_database()
-
-            # mismatched_rows = compare_dataframes(final_df, template_df)
-            # if mismatched_rows:
-            #     st.write(f"Mismatched: {mismatched_rows}")
-            # else:
-            #     st.write("All rows match the expected template.")
 
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -304,13 +415,12 @@ def main():
             
             output.seek(0)
 
-            # Step 8: Provide download link for the templated Excel file
+            # Provide download link for the templated Excel file
             current_date = datetime.datetime.now().strftime("%Y%m%d")
             new_file_name = f"{current_date}-{original_file_name}.xlsx"
 
             status.update(label=f"Process Complete!. {uploaded_file.name}", expanded=False)
-        pass
-
+        
         st.download_button(
             label="Download Mapped Excel",
             data=output,

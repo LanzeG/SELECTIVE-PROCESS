@@ -5,11 +5,16 @@ import datetime
 import os
 from openpyxl.utils import get_column_letter
 from openpyxl import Workbook
-import openpyxl
+# import openpyxl
 from openpyxl import load_workbook
 import io
-import msoffcrypto # type: ignore
+import msoffcrypto 
 # from querydb import query_database
+import pymysql 
+import pandas as pd
+
+
+
 
 def unlock_excel(file_content, password):
     try:
@@ -50,7 +55,7 @@ def load_template_headers():
 template_headers = load_template_headers()
 if template_headers is None:
     st.stop()
-
+    
 def load_header_mappings():
     try:
         # Load the header mappings from an external Excel file
@@ -73,6 +78,8 @@ def load_header_mappings():
     except Exception as e:
         st.error(f"Error loading header mappings: {e}")
         return None
+    
+    
 
 def map_headers(df, header_mappings):
     if header_mappings is None:
@@ -135,21 +142,111 @@ def process_each_sheet(uploaded_file):
     except Exception as e:
         st.error(f"Error processing Excel sheets: {e}")
         return None, None
-    
-# def fill_missing_headers(df, template_headers):
-#     for header in template_headers:
-#         if header not in df.columns:
-#             df[header] = None
-#     return df
 
-# def compare_dataframes(final_df, template_df):
-#     mismatched_rows = []
-#     for index, row in final_df.iterrows():
-#         if not row.equals(template_df.loc[index]):
-#             mismatched_rows.append(index)
-#     return mismatched_rows
+def prevent_scientific_notation(df):
+    if 'ACCOUNTNUMBER' in df.columns:
+        df['ACCOUNTNUMBER'] = df['ACCOUNTNUMBER'].apply(lambda x: f"{int(x):d}" if pd.notna(x) else None)
+    return df
+
+def query_database(account_number, query_date):
+    try:
+        # Establish connection to your database
+        connection = pymysql.connect(host='192.168.15.197',
+                                     user='ljbernas_bcp',
+                                     password='$C4Ov9P52n1sh',
+                                     database='bcrm',
+                                     charset='utf8mb4',
+                                     cursorclass=pymysql.cursors.DictCursor)
+
+        # Prepare SQL query with placeholders for dynamic values
+        sql = """
+        SELECT
+            client.client_name AS 'campaign',
+            leads_result.leads_result_id AS 'ResultID',
+            users.users_username AS 'Agent',
+            leads.leads_chcode AS 'chCode',
+            leads.leads_chname AS 'chName',
+            leads.leads_placement AS 'placement',
+            leads.leads_acctno AS 'AccountNumber',
+            leads_status.leads_status_name AS 'Status',
+            leads_result.leads_result_amount AS 'Amount',
+            leads_result.leads_result_ts AS 'ResultDate',
+            leads_result.leads_result_source AS 'source',
+            leads.leads_endo_date AS 'EndoDate',
+            leads.leads_ob AS 'OB',
+            leads_result.leads_result_barcode_date
+        FROM bcrm.leads_result
+        LEFT JOIN bcrm.leads ON (leads_result.leads_result_lead = leads.leads_id)
+        LEFT JOIN bcrm.client ON (leads.leads_client_id = client.client_id)
+        LEFT JOIN bcrm.users ON (leads_result.leads_result_users = users.users_id)
+        LEFT JOIN bcrm.users AS leads_users ON (leads_users.users_id = leads.leads_users_id)
+        LEFT JOIN bcrm.leads_status ON (leads_result.leads_result_status_id = leads_status.leads_status_id)
+        LEFT JOIN bcrm.leads_substatus ON (leads_result.leads_result_substatus_id = leads_substatus.leads_substatus_id) 
+        WHERE
+            leads_users.users_username <> 'POUT' 
+            AND leads.leads_acctno = %s
+            AND DATE(leads_result.leads_result_ts) = %s;
+        """
+        # Execute SQL query with parameters
+        with connection.cursor() as cursor:
+            cursor.execute(sql, (account_number, query_date))
+            results = cursor.fetchall()
+
+        return results[0] if results else None
+
+    except Exception as e:
+        print(f"Error querying database: {e}")
+
+    finally:
+        if connection:
+            connection.close()
+
+def fill_missing_fields(final_df, template_headers):
+    for index, row in final_df.iterrows():
+        # Extract account number and date from the current row
+        account_number = row['ACCOUNTNUMBER']
+        query_date = row['DATE']  # Assuming 'DATE' column exists in final_df
+        
+        if pd.notna(account_number) and pd.notna(query_date):
+            # Query database for the row's account number and date
+            try:
+                result = query_database(account_number, query_date)
+                if result:
+                    # Define mapping from SQL column names to DataFrame column headers
+                    column_mapping = {
+                        'chName': 'NAME',
+                        'campaign': 'CAMPAIGN',
+                        'Agent': 'AGENT',
+                        'chCode': 'CH CODE',
+                        'placement': 'PLACEMENT',
+                        'AccountNumber': 'ACCOUNTNUMBER',
+                        'Status': 'STATUS',
+                        'Amount': 'AMOUNT',
+                        'ResultDate': 'DATE',
+                        'source': 'PAYMENT SOURCE'
+                        # Add more mappings as needed
+                    }
+                    # Create a list of dictionaries (rows) to append to final_df
+                    print(type(result))
+                    print(result)
+                    # Update missing fields in final_df with database query result
+                    for key, value in result.items():
+                        for map_key, map_value in column_mapping.items():
+                            if map_key == key:  
+                                final_df.loc[index, map_value] = value
+                                break 
+            except Exception as e:
+                st.error(f"Error querying database for row {index}: {e}")
+
+    return final_df
 
 def main():
+    # Load template headers from the Excel file
+    template_headers = load_template_headers()  # Ensure this function returns the correct headers
+    
+    if template_headers is None:
+        st.stop()
+
     st.title("Automation Selective tool")
     st.markdown("""
     ### Instructions:            
@@ -159,7 +256,7 @@ def main():
     4. Input the CSV/XLSX password if the system detects it as encrypted.
     5. Download the OUTPUT file.
     6. Expect it may be slow due to QUERY from BCRM.
-
+    
     (Note: It does not accept xls file, consider resave the file as csv or xlsx)    
     """)
 
@@ -178,6 +275,8 @@ def main():
                 workbook = load_workbook(file_content, read_only=False, data_only=True, keep_vba=False, keep_links=False)
                 st.toast("File is not password protected, proceeding with automation! ✔️")
                 dfs, sheet_names = process_each_sheet(uploaded_file)
+                # Convert ACCOUNTNUMBER to string to prevent scientific notation
+                dfs = [prevent_scientific_notation(df) for df in dfs]
             except Exception:
                 password = st.text_input("Password", type="password")
                 if password:
@@ -187,6 +286,8 @@ def main():
                         with st.spinner("Processing selectives..."):
                             try:
                                 dfs, sheet_names = process_each_sheet(unlocked_file)
+                                # Convert ACCOUNTNUMBER to string to prevent scientific notation
+                                dfs = [prevent_scientific_notation(df) for df in dfs]
                                 st.write("Excel sheets processed successfully.")
                             except Exception as e:
                                 st.error(f"Failed to process the unlocked file: {e}")
@@ -201,18 +302,21 @@ def main():
             with st.spinner("Processing selectives..."):
                 try:
                     df = pd.read_csv(uploaded_file, encoding='utf-8')
+                    df = prevent_scientific_notation(df)
                     dfs = [df]
                     st.write("CSV file processed successfully.")
                 except UnicodeDecodeError:
                     st.error(f"Failed to read the CSV file with 'utf-8' encoding. Trying 'latin1' encoding. {uploaded_file.name}")
                     try:
                         df = pd.read_csv(uploaded_file, encoding='latin1')
+                        df = prevent_scientific_notation(df)
                         dfs = [df]
                         st.write("CSV file processed successfully with 'latin1' encoding.")
                     except UnicodeDecodeError:
                         st.error(f"Failed to read the CSV file with 'latin1' encoding. Trying 'iso-8859-1' encoding. {uploaded_file.name}")
                         try:
                             df = pd.read_csv(uploaded_file, encoding='iso-8859-1')
+                            df = prevent_scientific_notation(df)
                             dfs = [df]
                             st.write("CSV file processed successfully with 'iso-8859-1' encoding.")
                         except UnicodeDecodeError:
@@ -222,7 +326,7 @@ def main():
         else:
             st.info("Please upload a file.")
             st.stop()
-
+            
         with st.status("Processing Selective...", expanded=False) as status:
             # Convert all column names to strings to avoid mixed-type warnings
             for df in dfs:
@@ -241,8 +345,10 @@ def main():
             
             for df, sheet_name in zip(dfs, sheet_names):
                 
+                # Step 5: Map the headers
                 mapping = map_headers(df, header_mappings)
                 
+                # Check if the sheet contains at least two template headers
                 valid_headers = [header for header in mapping.values() if header is not None]
                 if len(valid_headers) < 2:
                     st.info(f"Skipping sheet ({sheet_name.upper()}) as it does not contain at least two template headers.")
@@ -250,30 +356,33 @@ def main():
                 st.write(sheet_name)
                 st.json(mapping, expanded=False)
 
+                # Step 6: Extract values based on mapped headers
                 extracted_data = {}
                 for template_header, original_header in mapping.items():
                     if original_header is not None:
                         extracted_data[template_header] = df[original_header].copy()
                     else:
                         extracted_data[template_header] = pd.Series([None] * len(df))
+
                 mapped_df = pd.DataFrame(extracted_data)
                 final_df = pd.concat([final_df, mapped_df], ignore_index=True)
 
-            final_df = add_ch_code_prefix(final_df)
+                # Debug: Check the intermediate final_df
+                st.write(f"Intermediate final_df after processing sheet {sheet_name}:")
+                st.dataframe(final_df.head())
             
+            # Step 7: Fill missing fields with None or default values
+            final_df = fill_missing_fields(final_df, template_headers)
+            
+            # Debug: Check the final_df after filling missing fields
+            st.write("final_df after filling missing fields:")
+            st.dataframe(final_df.head())
+
+            # Step 8: Add CH CODE Prefix to First Column if CH CODE exists
+            final_df = add_ch_code_prefix(final_df)
             
             st.write("OUTPUT PREVIEW:")
             st.dataframe(final_df.head())
-
-            # final_df = fill_missing_headers(final_df, template_header)
-
-            # template_header = query_database()
-
-            # mismatched_rows = compare_dataframes(final_df, template_df)
-            # if mismatched_rows:
-            #     st.write(f"Mismatched: {mismatched_rows}")
-            # else:
-            #     st.write("All rows match the expected template.")
 
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -300,13 +409,13 @@ def main():
             
             output.seek(0)
 
-            # Step 8: Provide download link for the templated Excel file
+            # Provide download link for the templated Excel file
             current_date = datetime.datetime.now().strftime("%Y%m%d")
             new_file_name = f"{current_date}-{original_file_name}.xlsx"
 
             status.update(label=f"Process Complete!. {uploaded_file.name}", expanded=False)
-        pass
-
+            st.success("Done!")
+        
         st.download_button(
             label="Download Mapped Excel",
             data=output,
