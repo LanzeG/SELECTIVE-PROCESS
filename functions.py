@@ -141,39 +141,31 @@ def prevent_scientific_notation(df):
     return df
 
 def fill_missing_fields(final_df, template_headers):
+    # Read the Excel file containing column mappings
+    mapping_df = pd.read_excel('column_mapping.xlsx')
+
+    # Convert the mapping DataFrame to a dictionary
+    column_mapping = mapping_df.set_index('SQL Column Name')['DataFrame Column Header'].to_dict()
+
     for index, row in final_df.iterrows():
         # Extract account number and date from the current row
         account_number = row['ACCOUNTNUMBER']
         query_date = row['DATE']  # Assuming 'DATE' column exists in final_df
+        client_name = row['CAMPAIGN']
         
-        if pd.notna(account_number) and pd.notna(query_date):
+        if pd.notna(account_number) and pd.notna(query_date) and pd.notna(client_name):
             # Query database for the row's account number and date
             try:
-                result = query_database(account_number, query_date)
+                result = query_database(client_name, account_number, query_date)
                 if result:
-                    # Define mapping from SQL column names to DataFrame column headers
-                    column_mapping = {
-                        'chName': 'NAME',
-                        'campaign': 'CAMPAIGN',
-                        'Agent': 'AGENT',
-                        'chCode': 'CH CODE',
-                        'placement': 'PLACEMENT',
-                        'AccountNumber': 'ACCOUNTNUMBER',
-                        'Status': 'STATUS',
-                        'Amount': 'AMOUNT', 
-                        'ResultDate': 'DATE',
-                        'source': 'PAYMENT SOURCE'
-                        # Add more mappings as needed
-                    }
-                    # Create a list of dictionaries (rows) to append to final_df
+                    # Print the type of result for debugging purposes
                     print(type(result))
                     print(result)
+                    
                     # Update missing fields in final_df with database query result
                     for key, value in result.items():
-                        for map_key, map_value in column_mapping.items():
-                            if map_key == key:  
-                                final_df.loc[index, map_value] = value
-                                break 
+                        if key in column_mapping:
+                            final_df.loc[index, column_mapping[key]] = value
             except Exception as e:
                 st.error(f"Error querying database for row {index}: {e}")
 
