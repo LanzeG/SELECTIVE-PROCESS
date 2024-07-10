@@ -46,8 +46,6 @@ def main():
                 workbook = load_workbook(file_content, read_only=False, data_only=True, keep_vba=False, keep_links=False)
                 st.toast("File is not password protected, proceeding with automation! ✔️")
                 dfs, sheet_names = process_each_sheet(uploaded_file)
-                # Convert ACCOUNTNUMBER to string to prevent scientific notation
-                dfs = [prevent_scientific_notation(df) for df in dfs]
             except Exception:
                 password = st.text_input("Password", type="password")
                 if password:
@@ -57,8 +55,6 @@ def main():
                         with st.spinner("Processing selectives..."):
                             try:
                                 dfs, sheet_names = process_each_sheet(unlocked_file)
-                                # Convert ACCOUNTNUMBER to string to prevent scientific notation
-                                dfs = [prevent_scientific_notation(df) for df in dfs]
                                 st.write("Excel sheets processed successfully.")
                             except Exception as e:
                                 st.error(f"Failed to process the unlocked file: {e}")
@@ -73,21 +69,18 @@ def main():
             with st.spinner("Processing selectives..."):
                 try:
                     df = pd.read_csv(uploaded_file, encoding='utf-8')
-                    df = prevent_scientific_notation(df)
                     dfs = [df]
                     st.write("CSV file processed successfully.")
                 except UnicodeDecodeError:
                     st.error(f"Failed to read the CSV file with 'utf-8' encoding. Trying 'latin1' encoding. {uploaded_file.name}")
                     try:
                         df = pd.read_csv(uploaded_file, encoding='latin1')
-                        df = prevent_scientific_notation(df)
                         dfs = [df]
                         st.write("CSV file processed successfully with 'latin1' encoding.")
                     except UnicodeDecodeError:
                         st.error(f"Failed to read the CSV file with 'latin1' encoding. Trying 'iso-8859-1' encoding. {uploaded_file.name}")
                         try:
                             df = pd.read_csv(uploaded_file, encoding='iso-8859-1')
-                            df = prevent_scientific_notation(df)
                             dfs = [df]
                             st.write("CSV file processed successfully with 'iso-8859-1' encoding.")
                         except UnicodeDecodeError:

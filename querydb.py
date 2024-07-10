@@ -14,7 +14,7 @@ import pymysql
 import pandas as pd
 from time import sleep
 
-def query_database(client_name, account_number, query_date):
+def query_database(client_name, account_number, ch_code):
     try:
         # Establish connection to your database
         connection = pymysql.connect(host='192.168.15.197',
@@ -25,7 +25,7 @@ def query_database(client_name, account_number, query_date):
                                      cursorclass=pymysql.cursors.DictCursor)
 
         # Prepare SQL query with placeholders for dynamic values
-        sql = """
+        sql = f"""
         SELECT
             `client`.`client_name` AS 'campaign',
             `leads_result`.`leads_result_id` AS 'ResultID',
@@ -34,12 +34,13 @@ def query_database(client_name, account_number, query_date):
             `leads`.`leads_chname` AS 'chName',
             `leads`.`leads_placement` AS 'placement',
             `leads`.`leads_acctno` AS 'AccountNumber',
+            `leads`.`leads_cycle` AS 'lev',
             `leads_status`.`leads_status_name` AS 'Status',
             `leads_result`.`leads_result_amount` AS 'Amount',
             `leads_result`.`leads_result_ts` AS 'ResultDate',
             `leads_result`.`leads_result_source`AS 'source',
             `leads`.`leads_endo_date` AS 'EndoDate',
-            `dv8`.`dynamic_value_name` AS 'LEVEL',
+            `leads`.`leads_block_code` AS 'block',
             `leads`.`leads_ob` AS 'OB',
             leads_result.`leads_result_barcode_date`
             FROM `bcrm`.`leads_result`
@@ -52,22 +53,23 @@ def query_database(client_name, account_number, query_date):
             LEFT JOIN `dynamic_value` AS dv8 ON (dv8.`dynamic_value_dynamic_id`=`leads_result`.`leads_result_lead`)
             WHERE
                 leads_users.users_username <> 'POUT' 
-                AND `client`.`client_name` = %s
-                AND `leads_status`.`leads_status_name` in ("PTP","CONFIRMS","PTP EPA")
-                AND leads.leads_acctno = %s
-                AND DATE(leads_result.leads_result_ts) = %s;
+                AND `client`.`client_name` = '{client_name}'
+                AND `leads_status`.`leads_status_name` IN ("PTP", "CONFIRMS", "PTP EPA")
+                AND leads.leads_acctno LIKE '%{account_number}'
+                AND leads.leads_chcode = '{ch_code}'
+
         """
         # Execute SQL query with parameters
         with connection.cursor() as cursor:
-            cursor.execute(sql, (client_name,account_number, query_date))
+            cursor.execute(sql)
             results = cursor.fetchall()
-
+            
         return results[0] if results else None
         
     except Exception as e:
         print(f"Error querying database: {e}")
         sleep(5)
-        query_database(client_name,account_number, query_date)
+        query_database(client_name,account_number, ch_code)
 
     finally:
         if connection:

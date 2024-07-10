@@ -150,13 +150,14 @@ def fill_missing_fields(final_df, template_headers):
     for index, row in final_df.iterrows():
         # Extract account number and date from the current row
         account_number = row['ACCOUNTNUMBER']
-        query_date = row['DATE']  # Assuming 'DATE' column exists in final_df
+        # query_date = row['RESULT_DATE']  # Assuming 'DATE' column exists in final_df and pd.notna(query_date) str(query_date),
         client_name = row['CAMPAIGN']
+        ch_code = row['CH CODE']
         
-        if pd.notna(account_number) and pd.notna(query_date) and pd.notna(client_name):
+        if pd.notna(account_number) and pd.notna(client_name) and pd.notna(ch_code):
             # Query database for the row's account number and date
             try:
-                result = query_database(client_name, account_number, query_date)
+                result = query_database(client_name, account_number, ch_code)
                 if result:
                     # Print the type of result for debugging purposes
                     print(type(result))
