@@ -136,7 +136,8 @@ def process_each_sheet(uploaded_file):
 def prevent_scientific_notation(df):
     if 'ACCOUNTNUMBER' in df.columns:
         df['ACCOUNTNUMBER'] = df['ACCOUNTNUMBER'].apply(
-            lambda x: str(x) if pd.notna(x) else None)
+            lambda x: f"{int(x):d}" if pd.notna(x) else None
+        )
     return df
 
 def fill_missing_fields(final_df, template_headers):
@@ -149,24 +150,26 @@ def fill_missing_fields(final_df, template_headers):
     for index, row in final_df.iterrows():
         # Extract account number and date from the current row
         account_number = row['ACCOUNTNUMBER']
-        # query_date = row['RESULT_DATE']  # Assuming 'DATE' column exists in final_df and pd.notna(query_date) str(query_date),
         client_name = row['CAMPAIGN']
         ch_code = row['CH CODE']
+        customer_name = row['NAME']
+        customer_id = row['ACCOUNTNUMBER']
+        # date = row['date']
         
-        if pd.notna(account_number) and pd.notna(client_name) and pd.notna(ch_code):
+       
             # Query database for the row's account number and date
-            try:
-                result = query_database(client_name, account_number, ch_code)
-                if result:
-                    # Print the type of result for debugging purposes
-                    print(type(result))
-                    print(result)
-                    
-                    # Update missing fields in final_df with database query result
-                    for key, value in result.items():
-                        if key in column_mapping:
-                            final_df.loc[index, column_mapping[key]] = value
-            except Exception as e:
-                st.error(f"Error querying database for row {index}: {e}")
+        try:
+            result = query_database(client_name, account_number, ch_code, customer_name, customer_id)
+            if result:
+                # Print the type of result for debugging purposes
+                print(type(result))
+                print(result)
+                
+                # Update missing fields in final_df with database query result
+                for key, value in result.items():
+                    if key in column_mapping:
+                        final_df.loc[index, column_mapping[key]] = value
+        except Exception as e:
+            st.error(f"Error querying database for row {index}: {e}")
 
     return final_df

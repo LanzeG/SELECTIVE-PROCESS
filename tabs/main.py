@@ -3,17 +3,23 @@ import pandas as pd
 from io import BytesIO
 import datetime
 import os
-from openpyxl.utils import get_column_letter
-from openpyxl import Workbook
-# import openpyxl
 from openpyxl import load_workbook
 import io
-import pandas as pd
-from functions import load_header_mappings, load_template_headers, load_workbook, process_each_sheet, prevent_scientific_notation, add_ch_code_prefix, unlock_excel, map_headers, fill_missing_fields
+from functions import (
+    load_header_mappings, 
+    load_template_headers, 
+    process_each_sheet, 
+    prevent_scientific_notation, 
+    add_ch_code_prefix, 
+    unlock_excel, 
+    map_headers, 
+    fill_missing_fields
+)
+from querydb import query_database  # Assuming you saved the query function in query_function.py
 
 def main():
     # Load template headers from the Excel file
-    template_headers = load_template_headers()  # Ensure this function returns the correct headers
+    template_headers = load_template_headers()
     
     if template_headers is None:
         st.stop()
@@ -60,7 +66,7 @@ def main():
                                 st.error(f"Failed to process the unlocked file: {e}")
                                 st.stop()
                     except Exception as e:
-                        st.error(str(e))    
+                        st.error(str(e))
                         st.stop()
                 else:
                     st.info("Please provide a password to unlock the file.")
@@ -143,15 +149,34 @@ def main():
             st.dataframe(final_df.head())
 
             # Step 8: Add CH CODE Prefix to First Column if CH CODE exists
+            final_df = prevent_scientific_notation(final_df)
             final_df = add_ch_code_prefix(final_df)
 
-            
+            # Prepare a DataFrame to hold the query results
+            results_df = pd.DataFrame()
+
+            # Query the database for each row and append results
+            for _, row in final_df.iterrows():
+                account_number = row.get('AccountNumber')
+                client_name = row.get('campaign')
+                ch_code = row.get('chCode')
+                date = row.get('ResultDate')
+                
+                results = query_database(client_name, account_number, ch_code, date)
+                if results:
+                    # Append results to the results DataFrame
+                    result_df = pd.DataFrame(results)
+                    results_df = pd.concat([results_df, result_df], ignore_index=True)
+
+            # Concatenate the original final_df with the results_df
+            final_df = pd.concat([final_df, results_df], ignore_index=True)
+
             # Comparison logic for PAYMENT_DATE and RESULT_DATE
             if 'PAYMENT_DATE' in final_df.columns and 'RESULT_DATE' in final_df.columns:
                 final_df['PAYMENT_DATE'] = pd.to_datetime(final_df['PAYMENT_DATE'], errors='coerce')
                 final_df['RESULT_DATE'] = pd.to_datetime(final_df['RESULT_DATE'], errors='coerce')
                 final_df['STATUS'] = final_df.apply(
-                    lambda row: 'No Tag' if row['RESULT_DATE'] < row['PAYMENT_DATE'] else 'Ok on barcoded date',
+                    lambda row: 'No Tag' if row['RESULT_DATE'] > row['PAYMENT_DATE'] else 'Ok on barcoded date',
                     axis=1
                 )
                 final_df['TAGGING AGENT'] = final_df.apply(
@@ -159,8 +184,6 @@ def main():
                     axis=1
                 )
 
-
-        
             st.write("OUTPUT PREVIEW:")
             st.dataframe(final_df.head())
 
