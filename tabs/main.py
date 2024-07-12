@@ -144,7 +144,23 @@ def main():
 
             # Step 8: Add CH CODE Prefix to First Column if CH CODE exists
             final_df = add_ch_code_prefix(final_df)
+
             
+            # Comparison logic for PAYMENT_DATE and RESULT_DATE
+            if 'PAYMENT_DATE' in final_df.columns and 'RESULT_DATE' in final_df.columns:
+                final_df['PAYMENT_DATE'] = pd.to_datetime(final_df['PAYMENT_DATE'], errors='coerce')
+                final_df['RESULT_DATE'] = pd.to_datetime(final_df['RESULT_DATE'], errors='coerce')
+                final_df['STATUS'] = final_df.apply(
+                    lambda row: 'No Tag' if row['RESULT_DATE'] < row['PAYMENT_DATE'] else 'Ok on barcoded date',
+                    axis=1
+                )
+                final_df['TAGGING AGENT'] = final_df.apply(
+                    lambda row: 'MSPM' if row['STATUS'] == 'No Tag' else row['AGENT'],
+                    axis=1
+                )
+
+
+        
             st.write("OUTPUT PREVIEW:")
             st.dataframe(final_df.head())
 

@@ -115,7 +115,6 @@ def add_ch_code_prefix(df):
 
     return df
 
-
 def process_each_sheet(uploaded_file):
     try:
         # Load the uploaded Excel file
@@ -136,8 +135,8 @@ def process_each_sheet(uploaded_file):
 
 def prevent_scientific_notation(df):
     if 'ACCOUNTNUMBER' in df.columns:
-        df['ACCOUNTNUMBER'] = df['ACCOUNTNUMBER'].apply(lambda x: f"{int(x):d}" if pd.notna(x) else None)
-        df['ACCOUNTNUMBER'] = df['ACCOUNTNUMBER'].astype(str)
+        df['ACCOUNTNUMBER'] = df['ACCOUNTNUMBER'].apply(
+            lambda x: str(x) if pd.notna(x) else None)
     return df
 
 def fill_missing_fields(final_df, template_headers):
